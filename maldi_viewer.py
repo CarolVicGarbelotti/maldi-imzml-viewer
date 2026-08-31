@@ -7,6 +7,7 @@ from pathlib import Path
 import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
+from matplotlib.patches import Patch
 import numpy as np
 import pyqtgraph as pg
 from pyimzml.ImzMLParser import ImzMLParser
@@ -15,6 +16,18 @@ from PySide6 import QtCore, QtGui, QtWidgets
 
 pg.setConfigOption("imageAxisOrder", "row-major")
 pg.setConfigOptions(antialias=False)
+
+
+OVERLAY_COLORS = {
+    "Magenta": (1.0, 0.0, 1.0),
+    "Green": (0.0, 1.0, 0.0),
+    "Cyan": (0.0, 1.0, 1.0),
+    "Red": (1.0, 0.0, 0.0),
+    "Blue": (0.0, 0.35, 1.0),
+    "Yellow": (1.0, 1.0, 0.0),
+    "Orange": (1.0, 0.45, 0.0),
+    "White": (1.0, 1.0, 1.0),
+}
 
 
 @dataclass
@@ -73,6 +86,9 @@ class MaldiViewer(QtWidgets.QMainWindow):
         self.current_spectrum_mz = np.array([])
         self.current_spectrum_intensity = np.array([])
         self.current_spectrum_title = "No dataset loaded"
+        self.overlay_layers: list[dict] = []
+        self.current_overlay_rgb: np.ndarray | None = None
+        self.display_is_overlay = False
         self._build_ui()
 
     def _build_ui(self):
@@ -152,6 +168,35 @@ class MaldiViewer(QtWidgets.QMainWindow):
         export_controls.addStretch(1)
         outer.addLayout(export_controls)
 
+        overlay_controls = QtWidgets.QHBoxLayout()
+        overlay_controls.addWidget(QtWidgets.QLabel("Overlay color:"))
+        self.overlay_color = QtWidgets.QComboBox()
+        self.overlay_color.addItems(list(OVERLAY_COLORS))
+        overlay_controls.addWidget(self.overlay_color)
+        self.add_overlay_button = QtWidgets.QPushButton("Add current ion")
+        self.add_overlay_button.setEnabled(False)
+        overlay_controls.addWidget(self.add_overlay_button)
+        overlay_controls.addWidget(QtWidgets.QLabel("Scaling:"))
+        self.overlay_scaling = QtWidgets.QComboBox()
+        self.overlay_scaling.addItems(["Separate per ion", "Shared across ions"])
+        overlay_controls.addWidget(self.overlay_scaling)
+        overlay_controls.addWidget(QtWidgets.QLabel("Upper percentile:"))
+        self.overlay_percentile = QtWidgets.QDoubleSpinBox()
+        self.overlay_percentile.setDecimals(1)
+        self.overlay_percentile.setRange(90.0, 100.0)
+        self.overlay_percentile.setValue(99.5)
+        self.overlay_percentile.setSingleStep(0.5)
+        overlay_controls.addWidget(self.overlay_percentile)
+        self.build_overlay_button = QtWidgets.QPushButton("Build overlay")
+        self.build_overlay_button.setEnabled(False)
+        self.clear_overlay_button = QtWidgets.QPushButton("Clear overlay")
+        self.clear_overlay_button.setEnabled(False)
+        overlay_controls.addWidget(self.build_overlay_button)
+        overlay_controls.addWidget(self.clear_overlay_button)
+        self.overlay_summary = QtWidgets.QLabel("No overlay ions selected")
+        overlay_controls.addWidget(self.overlay_summary, 1)
+        outer.addLayout(overlay_controls)
+
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         self.spectrum_plot = pg.PlotWidget(background="w")
         self.spectrum_plot.setLabel("bottom", "m/z")
@@ -194,6 +239,9 @@ class MaldiViewer(QtWidgets.QMainWindow):
         self.roi_button.clicked.connect(self.average_current_roi)
         self.export_image_button.clicked.connect(self.export_image)
         self.export_spectrum_button.clicked.connect(self.export_spectrum)
+        self.add_overlay_button.clicked.connect(self.add_current_ion_to_overlay)
+        self.build_overlay_button.clicked.connect(self.build_overlay)
+        self.clear_overlay_button.clicked.connect(self.clear_overlay)
         self.normalization.currentIndexChanged.connect(self.refresh_image)
         self.tolerance.valueChanged.connect(self.recalculate_current_mz)
         self.spectrum_plot.scene().sigMouseMoved.connect(self.on_spectrum_hover)
@@ -251,6 +299,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
         self.dataset = dataset
         self.ion_cache.clear()
         self.current_raw_image = self.current_tic_image = self.current_display_image = None
+        self.clear_overlay()
         self.show_spectrum(dataset.average_mz, dataset.average_intensity, "Whole-image mean spectrum — stored SCiLS RMS-normalized values")
         self.setWindowTitle(f"MALDI Viewer — {dataset.path.name}")
         self.status.setText(f"Loaded {len(dataset.coordinates):,} pixels; image grid {dataset.shape[1]} × {dataset.shape[0]}. Click a spectral peak.")
@@ -338,6 +387,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
         self.refresh_image()
         self.roi.show()
         self.export_image_button.setEnabled(True)
+        self.add_overlay_button.setEnabled(True)
         self.status.setText(
             f"Ready — displaying m/z {self.current_mz:.4f} ± {self.tolerance.value():.4f} Da. "
             "Click another spectral peak to calculate a new image."
@@ -346,6 +396,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
     def refresh_image(self):
         if self.current_raw_image is None:
             return
+        self.display_is_overlay = False
         self.current_display_image = self.current_raw_image if self.normalization.currentIndex() == 0 else self.current_tic_image
         self.image_view.setImage(self.current_display_image, autoRange=True, autoLevels=True)
         label = self.normalization.currentText()
@@ -362,10 +413,21 @@ class MaldiViewer(QtWidgets.QMainWindow):
         point = self.image_view.getView().vb.mapSceneToView(scene_pos)
         col, row = int(np.floor(point.x())), int(np.floor(point.y()))
         if 0 <= row < self.current_display_image.shape[0] and 0 <= col < self.current_display_image.shape[1]:
-            value = self.current_display_image[row, col]
             x = col + self.dataset.x_min
             y = row + self.dataset.y_min
-            self.image_hover.setText(f"x={x}, y={y}\nIntensity={value:.6g}", color="k")
+            if self.display_is_overlay:
+                lines = [f"x={x}, y={y}"]
+                image_key = "raw" if self.normalization.currentIndex() == 0 else "tic"
+                for layer in self.overlay_layers:
+                    lines.append(
+                        f"{layer['mz']:.4f} ({layer['color']}): "
+                        f"{layer[image_key][row, col]:.5g}"
+                    )
+                hover_text = "\n".join(lines)
+            else:
+                value = self.current_display_image[row, col]
+                hover_text = f"x={x}, y={y}\nIntensity={value:.6g}"
+            self.image_hover.setText(hover_text, color="k")
             self.image_hover.setPos(col, row)
             self.image_hover.show()
 
@@ -427,18 +489,104 @@ class MaldiViewer(QtWidgets.QMainWindow):
             return None
         return row0, row1, col0, col1
 
+    def add_current_ion_to_overlay(self):
+        if self.current_mz is None or self.current_raw_image is None:
+            self.status.setText("Calculate an ion image before adding it to an overlay.")
+            return
+        color = self.overlay_color.currentText()
+        tolerance = float(self.tolerance.value())
+        for layer in self.overlay_layers:
+            if np.isclose(layer["mz"], self.current_mz) and np.isclose(layer["tolerance"], tolerance):
+                layer["color"] = color
+                self._update_overlay_summary()
+                self.status.setText(f"Updated m/z {self.current_mz:.4f} to {color} in the overlay.")
+                return
+        self.overlay_layers.append({
+            "mz": float(self.current_mz),
+            "tolerance": tolerance,
+            "color": color,
+            "raw": self.current_raw_image.copy(),
+            "tic": self.current_tic_image.copy(),
+        })
+        self._update_overlay_summary()
+        self.build_overlay_button.setEnabled(True)
+        self.clear_overlay_button.setEnabled(True)
+        self.status.setText(f"Added m/z {self.current_mz:.4f} as {color}. Add another ion or build the overlay.")
+
+    def _update_overlay_summary(self):
+        if not self.overlay_layers:
+            self.overlay_summary.setText("No overlay ions selected")
+            return
+        self.overlay_summary.setText("; ".join(
+            f"{layer['mz']:.4f}={layer['color']}" for layer in self.overlay_layers
+        ))
+
+    def clear_overlay(self):
+        was_displayed = self.display_is_overlay
+        self.overlay_layers.clear()
+        self.current_overlay_rgb = None
+        self.display_is_overlay = False
+        self._update_overlay_summary()
+        self.build_overlay_button.setEnabled(False)
+        self.clear_overlay_button.setEnabled(False)
+        if was_displayed and self.current_raw_image is not None:
+            self.refresh_image()
+
+    def build_overlay(self):
+        if not self.overlay_layers:
+            self.status.setText("Add at least one ion before building an overlay.")
+            return
+        image_key = "raw" if self.normalization.currentIndex() == 0 else "tic"
+        images = [np.asarray(layer[image_key], dtype=np.float64) for layer in self.overlay_layers]
+        percentile = float(self.overlay_percentile.value())
+        if self.overlay_scaling.currentText() == "Separate per ion":
+            denominators = []
+            for image in images:
+                finite = image[np.isfinite(image)]
+                denominators.append(float(np.percentile(finite, percentile)) if finite.size else 0.0)
+        else:
+            finite_parts = [image[np.isfinite(image)] for image in images]
+            finite_parts = [part for part in finite_parts if part.size]
+            shared = float(np.percentile(np.concatenate(finite_parts), percentile)) if finite_parts else 0.0
+            denominators = [shared] * len(images)
+
+        rgb = np.zeros((*images[0].shape, 3), dtype=np.float64)
+        for layer, image, denominator in zip(self.overlay_layers, images, denominators):
+            if denominator <= 0:
+                continue
+            scaled = np.nan_to_num(image, nan=0.0, posinf=denominator, neginf=0.0)
+            scaled = np.clip(scaled / denominator, 0.0, 1.0)
+            color = np.asarray(OVERLAY_COLORS[layer["color"]], dtype=np.float64)
+            rgb += scaled[..., np.newaxis] * color
+        self.current_overlay_rgb = np.clip(rgb, 0.0, 1.0)
+        self.display_is_overlay = True
+        self.image_view.setImage(
+            np.round(self.current_overlay_rgb * 255).astype(np.uint8),
+            autoRange=True,
+            levels=(0, 255),
+        )
+        self.image_view.getView().setTitle(
+            f"Ion overlay — {self.overlay_scaling.currentText()}, {percentile:g}th percentile — "
+            f"{self.normalization.currentText()}"
+        )
+        self.roi.show()
+        self.export_image_button.setEnabled(True)
+        self.status.setText(f"Overlay ready with {len(self.overlay_layers)} ion(s).")
+
     def export_image(self):
         if self.current_display_image is None:
             return
         use_roi = self.export_area.currentText() == "Rectangle ROI"
         area_suffix = "_roi" if use_roi else ""
+        is_overlay = self.display_is_overlay and self.current_overlay_rgb is not None
+        base_name = "ion_overlay" if is_overlay else f"ion_mz_{self.current_mz:.4f}"
         filename, selected = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export publication ion image", f"ion_mz_{self.current_mz:.4f}{area_suffix}.tiff",
+            self, "Export publication ion image", f"{base_name}{area_suffix}.tiff",
             "TIFF (*.tif *.tiff);;PNG (*.png);;PDF (*.pdf);;SVG (*.svg)"
         )
         if not filename:
             return
-        image = self.current_display_image
+        image = self.current_overlay_rgb if is_overlay else self.current_display_image
         if use_roi:
             bounds = self._current_roi_array_bounds(image)
             if bounds is None:
@@ -450,15 +598,36 @@ class MaldiViewer(QtWidgets.QMainWindow):
         aspect = image.shape[1] / max(image.shape[0], 1)
         figure_width = float(np.clip(4.5 * aspect + 1.2, 4.8, 9.0))
         fig, ax = plt.subplots(figsize=(figure_width, 5), constrained_layout=True)
-        shown = ax.imshow(image, origin="upper", cmap="inferno", interpolation="nearest")
+        if is_overlay:
+            ax.imshow(image, origin="upper", interpolation="nearest")
+        else:
+            shown = ax.imshow(image, origin="upper", cmap="inferno", interpolation="nearest")
         if self.show_pixel_axes.isChecked():
             ax.set_xlabel("x pixel")
             ax.set_ylabel("y pixel")
         else:
             ax.set_axis_off()
-        ax.set_title(f"m/z {self.current_mz:.4f} ± {self.tolerance.value():.4f} Da")
-        cbar = fig.colorbar(shown, ax=ax, fraction=0.046, pad=0.04)
-        cbar.set_label(self.normalization.currentText())
+        if is_overlay:
+            ax.set_title(
+                f"Ion overlay — {self.overlay_scaling.currentText()}, "
+                f"{self.overlay_percentile.value():g}th percentile"
+            )
+            legend_handles = [
+                Patch(color=OVERLAY_COLORS[layer["color"]], label=f"m/z {layer['mz']:.4f}")
+                for layer in self.overlay_layers
+            ]
+            ax.legend(
+                handles=legend_handles,
+                title=self.normalization.currentText(),
+                loc="upper center",
+                bbox_to_anchor=(0.5, -0.02),
+                ncol=min(3, len(legend_handles)),
+                frameon=False,
+            )
+        else:
+            ax.set_title(f"m/z {self.current_mz:.4f} ± {self.tolerance.value():.4f} Da")
+            cbar = fig.colorbar(shown, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label(self.normalization.currentText())
         um_per_pixel = self.microns_per_pixel.value()
         if um_per_pixel > 0:
             pixels = self.scale_bar_um.value() / um_per_pixel
@@ -526,6 +695,15 @@ class MaldiViewer(QtWidgets.QMainWindow):
         self.total_button.setEnabled(not busy and self.dataset is not None)
         self.roi_button.setEnabled(
             not busy and self.dataset is not None and self.current_display_image is not None
+        )
+        self.add_overlay_button.setEnabled(
+            not busy and self.current_raw_image is not None
+        )
+        self.build_overlay_button.setEnabled(
+            not busy and bool(self.overlay_layers)
+        )
+        self.clear_overlay_button.setEnabled(
+            not busy and bool(self.overlay_layers)
         )
         if busy:
             QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.CursorShape.WaitCursor)
