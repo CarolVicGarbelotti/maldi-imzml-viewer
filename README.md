@@ -20,7 +20,7 @@ If PowerShell blocks activation, the environment can be used without activation:
 .venv\Scripts\python.exe maldi_viewer.py
 ```
 
-After installation, start with `run_viewer.bat`. It automatically uses the local `.venv` when present.
+After installation, start with `run_viewer.bat` if `python` points to this environment, or use the explicit `.venv` command above.
 
 ## Workflow
 
@@ -33,6 +33,20 @@ After installation, start with `run_viewer.bat`. It automatically uses the local
 7. Move/resize the cyan rectangle and click **Average rectangle ROI** for an ROI spectrum.
 8. Click **Whole-image mean** to restore the total mean spectrum.
 
+## Multi-ion overlays
+
+1. Calculate an ion image by clicking its spectral peak.
+2. Choose an overlay color and click **Add current ion**.
+3. Repeat for each ion, then choose a scaling mode and click **Build overlay**.
+4. Use **Clear overlay** to begin a new combination.
+
+Available colors are magenta, green, cyan, red, blue, yellow, orange, and white.
+
+- **Separate per ion** scales every ion to its own selected upper percentile. This is useful for comparing spatial distributions and colocalization, but color brightness does not represent abundance differences between ions.
+- **Shared across ions** uses one percentile-derived denominator for every ion. This preserves relative intensity differences when the ion values are scientifically comparable.
+
+Overlay exports include an ion-color legend and support the same full-image/ROI, pixel-axis, scale-bar color, and scale-bar position controls as single-ion exports.
+
 ## Normalization
 
 The primary display is labeled **Stored intensity (SCiLS RMS-normalized)** because these imzML files were exported from SCiLS after RMS normalization. It is not original detector-count intensity.
@@ -44,9 +58,6 @@ The primary display is labeled **Stored intensity (SCiLS RMS-normalized)** becau
 - Ion images: TIFF, PNG, PDF, or SVG.
 - Spectra: SVG, PDF, TIFF, or PNG.
 - Default raster resolution: 600 dpi.
-- Export either the full ion image or the current rectangular ROI.
-- Pixel axes are hidden by default and can be restored with **Show pixel axes**.
-- Choose a white or black scale bar and place it in any corner.
 - Enter the dataset calibration in µm/pixel to add a physical scale bar. Leave it at zero to omit the scale bar.
 
 The export is redrawn with Matplotlib; it is not a screenshot of the interactive window.
@@ -57,4 +68,3 @@ The export is redrawn with Matplotlib; it is not a screenshot of the interactive
 - Previously calculated `(m/z, tolerance)` images are cached in RAM.
 - Changing between stored RMS intensity and additional TIC normalization is immediate because both images are calculated together.
 - The cache is cleared whenever a new dataset is opened and disappears when the application closes.
-- While a spectrum or image calculation is running, additional plot clicks are temporarily ignored. The status line changes back to **Ready** when another peak can be selected.
