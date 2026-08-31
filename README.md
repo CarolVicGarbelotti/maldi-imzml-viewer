@@ -44,6 +44,9 @@ The primary display is labeled **Stored intensity (SCiLS RMS-normalized)** becau
 - Ion images: TIFF, PNG, PDF, or SVG.
 - Spectra: SVG, PDF, TIFF, or PNG.
 - Default raster resolution: 600 dpi.
+- Export either the full ion image or the current rectangular ROI.
+- Pixel axes are hidden by default and can be restored with **Show pixel axes**.
+- Choose a white or black scale bar and place it in any corner.
 - Enter the dataset calibration in µm/pixel to add a physical scale bar. Leave it at zero to omit the scale bar.
 
 The export is redrawn with Matplotlib; it is not a screenshot of the interactive window.
