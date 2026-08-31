@@ -193,9 +193,22 @@ class MaldiViewer(QtWidgets.QMainWindow):
         self.clear_overlay_button.setEnabled(False)
         overlay_controls.addWidget(self.build_overlay_button)
         overlay_controls.addWidget(self.clear_overlay_button)
-        self.overlay_summary = QtWidgets.QLabel("No overlay ions selected")
-        overlay_controls.addWidget(self.overlay_summary, 1)
+        overlay_controls.addStretch(1)
         outer.addLayout(overlay_controls)
+
+        self.overlay_table = QtWidgets.QTableWidget(0, 5)
+        self.overlay_table.setHorizontalHeaderLabels([
+            "Show", "m/z", "± m/z", "Color", "Remove"
+        ])
+        self.overlay_table.verticalHeader().setVisible(False)
+        self.overlay_table.setSelectionMode(QtWidgets.QAbstractItemView.SelectionMode.NoSelection)
+        self.overlay_table.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.overlay_table.horizontalHeader().setSectionResizeMode(
+            3, QtWidgets.QHeaderView.ResizeMode.Stretch
+        )
+        self.overlay_table.setMaximumHeight(150)
+        self.overlay_table.setVisible(False)
+        outer.addWidget(self.overlay_table)
 
         splitter = QtWidgets.QSplitter(QtCore.Qt.Orientation.Vertical)
         self.spectrum_plot = pg.PlotWidget(background="w")
@@ -242,7 +255,14 @@ class MaldiViewer(QtWidgets.QMainWindow):
         self.add_overlay_button.clicked.connect(self.add_current_ion_to_overlay)
         self.build_overlay_button.clicked.connect(self.build_overlay)
         self.clear_overlay_button.clicked.connect(self.clear_overlay)
-        self.normalization.currentIndexChanged.connect(self.refresh_image)
+        self.overlay_table.itemChanged.connect(self.on_overlay_table_item_changed)
+        self.normalization.currentIndexChanged.connect(self.on_normalization_changed)
+        self.overlay_scaling.currentIndexChanged.connect(
+            lambda: self._refresh_overlay_after_edit()
+        )
+        self.overlay_percentile.valueChanged.connect(
+            lambda: self._refresh_overlay_after_edit()
+        )
         self.tolerance.valueChanged.connect(self.recalculate_current_mz)
         self.spectrum_plot.scene().sigMouseMoved.connect(self.on_spectrum_hover)
         self.spectrum_plot.scene().sigMouseClicked.connect(self.on_spectrum_click)
@@ -402,6 +422,12 @@ class MaldiViewer(QtWidgets.QMainWindow):
         label = self.normalization.currentText()
         self.image_view.getView().setTitle(f"m/z {self.current_mz:.4f} ± {self.tolerance.value():.4f} Da — {label}")
 
+    def on_normalization_changed(self):
+        if self.display_is_overlay and self._visible_overlay_layers():
+            self.build_overlay()
+        else:
+            self.refresh_image()
+
     def recalculate_current_mz(self):
         if not self._busy and self.current_mz is not None:
             self.calculate_ion_image(self.current_mz)
@@ -418,7 +444,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
             if self.display_is_overlay:
                 lines = [f"x={x}, y={y}"]
                 image_key = "raw" if self.normalization.currentIndex() == 0 else "tic"
-                for layer in self.overlay_layers:
+                for layer in self._visible_overlay_layers():
                     lines.append(
                         f"{layer['mz']:.4f} ({layer['color']}): "
                         f"{layer[image_key][row, col]:.5g}"
@@ -498,46 +524,108 @@ class MaldiViewer(QtWidgets.QMainWindow):
         for layer in self.overlay_layers:
             if np.isclose(layer["mz"], self.current_mz) and np.isclose(layer["tolerance"], tolerance):
                 layer["color"] = color
-                self._update_overlay_summary()
+                layer["visible"] = True
+                self._update_overlay_table()
+                self._refresh_overlay_after_edit()
                 self.status.setText(f"Updated m/z {self.current_mz:.4f} to {color} in the overlay.")
                 return
         self.overlay_layers.append({
             "mz": float(self.current_mz),
             "tolerance": tolerance,
             "color": color,
+            "visible": True,
             "raw": self.current_raw_image.copy(),
             "tic": self.current_tic_image.copy(),
         })
-        self._update_overlay_summary()
+        self._update_overlay_table()
         self.build_overlay_button.setEnabled(True)
         self.clear_overlay_button.setEnabled(True)
         self.status.setText(f"Added m/z {self.current_mz:.4f} as {color}. Add another ion or build the overlay.")
 
-    def _update_overlay_summary(self):
-        if not self.overlay_layers:
-            self.overlay_summary.setText("No overlay ions selected")
+    def _update_overlay_table(self):
+        self.overlay_table.blockSignals(True)
+        self.overlay_table.setRowCount(len(self.overlay_layers))
+        for row, layer in enumerate(self.overlay_layers):
+            visible_item = QtWidgets.QTableWidgetItem()
+            visible_item.setFlags(
+                QtCore.Qt.ItemFlag.ItemIsEnabled | QtCore.Qt.ItemFlag.ItemIsUserCheckable
+            )
+            visible_item.setCheckState(
+                QtCore.Qt.CheckState.Checked if layer.get("visible", True)
+                else QtCore.Qt.CheckState.Unchecked
+            )
+            self.overlay_table.setItem(row, 0, visible_item)
+            self.overlay_table.setItem(row, 1, QtWidgets.QTableWidgetItem(f"{layer['mz']:.4f}"))
+            self.overlay_table.setItem(row, 2, QtWidgets.QTableWidgetItem(f"{layer['tolerance']:.4f}"))
+
+            color_box = QtWidgets.QComboBox()
+            color_box.addItems(list(OVERLAY_COLORS))
+            color_box.setCurrentText(layer["color"])
+            color_box.currentTextChanged.connect(
+                lambda value, selected_layer=layer: self.change_overlay_color(selected_layer, value)
+            )
+            self.overlay_table.setCellWidget(row, 3, color_box)
+
+            remove_button = QtWidgets.QPushButton("Remove")
+            remove_button.clicked.connect(
+                lambda checked=False, selected_layer=layer: self.remove_overlay_layer(selected_layer)
+            )
+            self.overlay_table.setCellWidget(row, 4, remove_button)
+        self.overlay_table.blockSignals(False)
+        self.overlay_table.setVisible(bool(self.overlay_layers))
+        self.overlay_table.resizeRowsToContents()
+
+    def on_overlay_table_item_changed(self, item):
+        if item.column() != 0 or not (0 <= item.row() < len(self.overlay_layers)):
             return
-        self.overlay_summary.setText("; ".join(
-            f"{layer['mz']:.4f}={layer['color']}" for layer in self.overlay_layers
-        ))
+        self.overlay_layers[item.row()]["visible"] = (
+            item.checkState() == QtCore.Qt.CheckState.Checked
+        )
+        self._refresh_overlay_after_edit()
+
+    def change_overlay_color(self, layer: dict, color: str):
+        layer["color"] = color
+        self._refresh_overlay_after_edit()
+
+    def remove_overlay_layer(self, layer: dict):
+        self.overlay_layers = [candidate for candidate in self.overlay_layers if candidate is not layer]
+        self._update_overlay_table()
+        self.build_overlay_button.setEnabled(bool(self.overlay_layers))
+        self.clear_overlay_button.setEnabled(bool(self.overlay_layers))
+        self._refresh_overlay_after_edit()
+        self.status.setText("Overlay ion removed.")
+
+    def _visible_overlay_layers(self):
+        return [layer for layer in self.overlay_layers if layer.get("visible", True)]
+
+    def _refresh_overlay_after_edit(self):
+        if not self.display_is_overlay:
+            return
+        if self._visible_overlay_layers():
+            self.build_overlay()
+        else:
+            self.current_overlay_rgb = None
+            self.refresh_image()
+            self.status.setText("All overlay ions are hidden; showing the current single-ion image.")
 
     def clear_overlay(self):
         was_displayed = self.display_is_overlay
         self.overlay_layers.clear()
         self.current_overlay_rgb = None
         self.display_is_overlay = False
-        self._update_overlay_summary()
+        self._update_overlay_table()
         self.build_overlay_button.setEnabled(False)
         self.clear_overlay_button.setEnabled(False)
         if was_displayed and self.current_raw_image is not None:
             self.refresh_image()
 
     def build_overlay(self):
-        if not self.overlay_layers:
-            self.status.setText("Add at least one ion before building an overlay.")
+        visible_layers = self._visible_overlay_layers()
+        if not visible_layers:
+            self.status.setText("Show at least one ion before building an overlay.")
             return
         image_key = "raw" if self.normalization.currentIndex() == 0 else "tic"
-        images = [np.asarray(layer[image_key], dtype=np.float64) for layer in self.overlay_layers]
+        images = [np.asarray(layer[image_key], dtype=np.float64) for layer in visible_layers]
         percentile = float(self.overlay_percentile.value())
         if self.overlay_scaling.currentText() == "Separate per ion":
             denominators = []
@@ -551,7 +639,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
             denominators = [shared] * len(images)
 
         rgb = np.zeros((*images[0].shape, 3), dtype=np.float64)
-        for layer, image, denominator in zip(self.overlay_layers, images, denominators):
+        for layer, image, denominator in zip(visible_layers, images, denominators):
             if denominator <= 0:
                 continue
             scaled = np.nan_to_num(image, nan=0.0, posinf=denominator, neginf=0.0)
@@ -571,7 +659,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
         )
         self.roi.show()
         self.export_image_button.setEnabled(True)
-        self.status.setText(f"Overlay ready with {len(self.overlay_layers)} ion(s).")
+        self.status.setText(f"Overlay ready with {len(visible_layers)} visible ion(s).")
 
     def export_image(self):
         if self.current_display_image is None:
@@ -614,7 +702,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
             )
             legend_handles = [
                 Patch(color=OVERLAY_COLORS[layer["color"]], label=f"m/z {layer['mz']:.4f}")
-                for layer in self.overlay_layers
+                for layer in self._visible_overlay_layers()
             ]
             ax.legend(
                 handles=legend_handles,
