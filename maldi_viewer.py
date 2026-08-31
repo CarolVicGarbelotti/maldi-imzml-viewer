@@ -128,6 +128,27 @@ class MaldiViewer(QtWidgets.QMainWindow):
         self.scale_bar_um.setRange(1, 100000)
         self.scale_bar_um.setValue(50)
         export_controls.addWidget(self.scale_bar_um)
+
+        export_controls.addWidget(QtWidgets.QLabel("Export area:"))
+        self.export_area = QtWidgets.QComboBox()
+        self.export_area.addItems(["Full image", "Rectangle ROI"])
+        export_controls.addWidget(self.export_area)
+
+        self.show_pixel_axes = QtWidgets.QCheckBox("Show pixel axes")
+        self.show_pixel_axes.setChecked(False)
+        export_controls.addWidget(self.show_pixel_axes)
+
+        export_controls.addWidget(QtWidgets.QLabel("Scale-bar color:"))
+        self.scale_bar_color = QtWidgets.QComboBox()
+        self.scale_bar_color.addItems(["White", "Black"])
+        export_controls.addWidget(self.scale_bar_color)
+
+        export_controls.addWidget(QtWidgets.QLabel("Position:"))
+        self.scale_bar_position = QtWidgets.QComboBox()
+        self.scale_bar_position.addItems([
+            "Bottom left", "Bottom right", "Top left", "Top right"
+        ])
+        export_controls.addWidget(self.scale_bar_position)
         export_controls.addStretch(1)
         outer.addLayout(export_controls)
 
@@ -363,9 +384,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
     def average_current_roi(self):
         if not self.dataset or self.current_display_image is None:
             return
-        pos, size = self.roi.pos(), self.roi.size()
-        x0, x1 = sorted((pos.x(), pos.x() + size.x()))
-        y0, y1 = sorted((pos.y(), pos.y() + size.y()))
+        x0, x1, y0, y1 = self._current_roi_float_bounds()
         indices = [
             i for i, c in enumerate(self.dataset.coordinates)
             if x0 <= int(c[0]) - self.dataset.x_min < x1 and y0 <= int(c[1]) - self.dataset.y_min < y1
@@ -392,30 +411,90 @@ class MaldiViewer(QtWidgets.QMainWindow):
             np.add.at(accumulated, bins[valid], intensity[valid])
         return accumulated / len(indices)
 
+    def _current_roi_float_bounds(self):
+        pos, size = self.roi.pos(), self.roi.size()
+        x0, x1 = sorted((float(pos.x()), float(pos.x() + size.x())))
+        y0, y1 = sorted((float(pos.y()), float(pos.y() + size.y())))
+        return x0, x1, y0, y1
+
+    def _current_roi_array_bounds(self, image: np.ndarray):
+        x0, x1, y0, y1 = self._current_roi_float_bounds()
+        col0 = max(0, int(np.floor(x0)))
+        col1 = min(image.shape[1], int(np.ceil(x1)))
+        row0 = max(0, int(np.floor(y0)))
+        row1 = min(image.shape[0], int(np.ceil(y1)))
+        if row1 <= row0 or col1 <= col0:
+            return None
+        return row0, row1, col0, col1
+
     def export_image(self):
         if self.current_display_image is None:
             return
+        use_roi = self.export_area.currentText() == "Rectangle ROI"
+        area_suffix = "_roi" if use_roi else ""
         filename, selected = QtWidgets.QFileDialog.getSaveFileName(
-            self, "Export publication ion image", f"ion_mz_{self.current_mz:.4f}.tiff",
+            self, "Export publication ion image", f"ion_mz_{self.current_mz:.4f}{area_suffix}.tiff",
             "TIFF (*.tif *.tiff);;PNG (*.png);;PDF (*.pdf);;SVG (*.svg)"
         )
         if not filename:
             return
         image = self.current_display_image
-        fig, ax = plt.subplots(figsize=(5, 5), constrained_layout=True)
+        if use_roi:
+            bounds = self._current_roi_array_bounds(image)
+            if bounds is None:
+                QtWidgets.QMessageBox.warning(self, "Invalid ROI", "The rectangle does not overlap the ion image.")
+                return
+            row0, row1, col0, col1 = bounds
+            image = image[row0:row1, col0:col1]
+
+        aspect = image.shape[1] / max(image.shape[0], 1)
+        figure_width = float(np.clip(4.5 * aspect + 1.2, 4.8, 9.0))
+        fig, ax = plt.subplots(figsize=(figure_width, 5), constrained_layout=True)
         shown = ax.imshow(image, origin="upper", cmap="inferno", interpolation="nearest")
-        ax.set_xlabel("x pixel")
-        ax.set_ylabel("y pixel")
+        if self.show_pixel_axes.isChecked():
+            ax.set_xlabel("x pixel")
+            ax.set_ylabel("y pixel")
+        else:
+            ax.set_axis_off()
         ax.set_title(f"m/z {self.current_mz:.4f} ± {self.tolerance.value():.4f} Da")
         cbar = fig.colorbar(shown, ax=ax, fraction=0.046, pad=0.04)
         cbar.set_label(self.normalization.currentText())
         um_per_pixel = self.microns_per_pixel.value()
         if um_per_pixel > 0:
             pixels = self.scale_bar_um.value() / um_per_pixel
-            x0 = image.shape[1] * 0.06
-            y0 = image.shape[0] * 0.93
-            ax.plot([x0, x0 + pixels], [y0, y0], color="white", linewidth=4, solid_capstyle="butt")
-            ax.text(x0 + pixels / 2, y0 - image.shape[0] * 0.025, f"{self.scale_bar_um.value():g} µm", color="white", ha="center", va="bottom")
+            if pixels >= image.shape[1] * 0.88:
+                plt.close(fig)
+                QtWidgets.QMessageBox.warning(
+                    self,
+                    "Scale bar too long",
+                    "The requested scale bar is too long for this export area. "
+                    "Choose a shorter bar or export a larger area.",
+                )
+                return
+            margin_x = image.shape[1] * 0.06
+            margin_y = image.shape[0] * 0.07
+            position = self.scale_bar_position.currentText()
+            if "left" in position.lower():
+                bar_x0, bar_x1 = margin_x, margin_x + pixels
+            else:
+                bar_x1 = image.shape[1] - margin_x
+                bar_x0 = bar_x1 - pixels
+            if "bottom" in position.lower():
+                bar_y = image.shape[0] - margin_y
+                text_y, vertical_alignment = bar_y - image.shape[0] * 0.025, "bottom"
+            else:
+                bar_y = margin_y
+                text_y, vertical_alignment = bar_y + image.shape[0] * 0.025, "top"
+            color = self.scale_bar_color.currentText().lower()
+            ax.plot([bar_x0, bar_x1], [bar_y, bar_y], color=color, linewidth=4, solid_capstyle="butt")
+            ax.text(
+                (bar_x0 + bar_x1) / 2,
+                text_y,
+                f"{self.scale_bar_um.value():g} µm",
+                color=color,
+                ha="center",
+                va=vertical_alignment,
+            )
         fig.savefig(filename, dpi=self.dpi.value(), bbox_inches="tight")
         plt.close(fig)
         self.status.setText(f"Exported {filename}")
