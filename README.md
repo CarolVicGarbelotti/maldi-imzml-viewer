@@ -38,7 +38,10 @@ After installation, start with `run_viewer.bat` if `python` points to this envir
 1. Calculate an ion image by clicking its spectral peak.
 2. Choose an overlay color and click **Add current ion**.
 3. Repeat for each ion, then choose a scaling mode and click **Build overlay**.
-4. Use **Clear overlay** to begin a new combination.
+4. Use the interactive ion table to show/hide ions, change colors, or remove individual ions.
+5. Use **Clear overlay** only when you want to begin a completely new combination.
+
+When an overlay is already displayed, table edits update it immediately. Hidden ions remain in the list and can be restored without recalculating their ion images.
 
 Available colors are magenta, green, cyan, red, blue, yellow, orange, and white.
 
