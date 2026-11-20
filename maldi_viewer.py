@@ -39,6 +39,7 @@ class Dataset:
     x_min: int
     y_min: int
     shape: tuple[int, int]
+    total_ion_image: np.ndarray
     average_mz: np.ndarray
     average_intensity: np.ndarray
     bin_width: float
@@ -89,6 +90,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
         self.overlay_layers: list[dict] = []
         self.current_overlay_rgb: np.ndarray | None = None
         self.display_is_overlay = False
+        self.current_image_mode = "none"
         self._build_ui()
 
     def _build_ui(self):
@@ -98,14 +100,19 @@ class MaldiViewer(QtWidgets.QMainWindow):
 
         controls = QtWidgets.QHBoxLayout()
         self.open_button = QtWidgets.QPushButton("Open imzML")
-        self.total_button = QtWidgets.QPushButton("Whole-image mean")
+        self.total_button = QtWidgets.QPushButton("Whole-image mean spectrum")
+        self.total_image_button = QtWidgets.QPushButton("Total ion image")
         self.roi_button = QtWidgets.QPushButton("Average rectangle ROI")
-        self.export_image_button = QtWidgets.QPushButton("Export ion image")
+        self.export_image_button = QtWidgets.QPushButton("Export image")
         self.export_spectrum_button = QtWidgets.QPushButton("Export spectrum")
-        for button in (self.total_button, self.roi_button, self.export_image_button, self.export_spectrum_button):
+        for button in (
+            self.total_button, self.total_image_button, self.roi_button,
+            self.export_image_button, self.export_spectrum_button
+        ):
             button.setEnabled(False)
         controls.addWidget(self.open_button)
         controls.addWidget(self.total_button)
+        controls.addWidget(self.total_image_button)
         controls.addWidget(self.roi_button)
         controls.addStretch(1)
 
@@ -249,6 +256,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
 
         self.open_button.clicked.connect(self.open_dataset)
         self.total_button.clicked.connect(self.show_total_spectrum)
+        self.total_image_button.clicked.connect(self.show_total_ion_image)
         self.roi_button.clicked.connect(self.average_current_roi)
         self.export_image_button.clicked.connect(self.export_image)
         self.export_spectrum_button.clicked.connect(self.export_spectrum)
@@ -284,7 +292,10 @@ class MaldiViewer(QtWidgets.QMainWindow):
         )
         if not ok:
             return
-        self.set_busy(True, "Reading dataset and calculating the whole-image mean spectrum...")
+        self.set_busy(
+            True,
+            "Reading dataset and calculating the whole-image mean spectrum and total ion image...",
+        )
         worker = Worker(self._load_dataset, path, bin_width)
         worker.signals.result.connect(self._dataset_loaded)
         worker.signals.error.connect(self.show_error)
@@ -303,27 +314,42 @@ class MaldiViewer(QtWidgets.QMainWindow):
         high = np.ceil(first_mz.max() / bin_width) * bin_width
         edges = np.arange(low, high + bin_width, bin_width)
         summed = np.zeros(edges.size - 1, dtype=np.float64)
+        total_ion_image = np.full(shape, np.nan, dtype=np.float64)
         for i in range(len(coords)):
             mz, intensity = parser.getspectrum(i)
             valid = (mz >= edges[0]) & (mz < edges[-1])
             bins = np.floor((mz[valid] - edges[0]) / bin_width).astype(np.int64)
             np.add.at(summed, bins, intensity[valid])
+            row = int(coords[i, 1]) - y_min
+            col = int(coords[i, 0]) - x_min
+            total_ion_image[row, col] = float(np.sum(intensity, dtype=np.float64))
         return Dataset(
-            path, parser, coords,
-            {(int(c[0]), int(c[1])): i for i, c in enumerate(coords)},
-            x_min, y_min, shape, edges[:-1] + bin_width / 2,
-            summed / len(coords), bin_width,
+            path=path,
+            parser=parser,
+            coordinates=coords,
+            coordinate_to_index={(int(c[0]), int(c[1])): i for i, c in enumerate(coords)},
+            x_min=x_min,
+            y_min=y_min,
+            shape=shape,
+            total_ion_image=total_ion_image,
+            average_mz=edges[:-1] + bin_width / 2,
+            average_intensity=summed / len(coords),
+            bin_width=bin_width,
         )
 
     def _dataset_loaded(self, dataset: Dataset):
         self.dataset = dataset
         self.ion_cache.clear()
         self.current_raw_image = self.current_tic_image = self.current_display_image = None
+        self.current_image_mode = "none"
         self.clear_overlay()
         self.show_spectrum(dataset.average_mz, dataset.average_intensity, "Whole-image mean spectrum — stored SCiLS RMS-normalized values")
         self.setWindowTitle(f"MALDI Viewer — {dataset.path.name}")
         self.status.setText(f"Loaded {len(dataset.coordinates):,} pixels; image grid {dataset.shape[1]} × {dataset.shape[0]}. Click a spectral peak.")
-        for button in (self.total_button, self.roi_button, self.export_spectrum_button):
+        for button in (
+            self.total_button, self.total_image_button,
+            self.roi_button, self.export_spectrum_button
+        ):
             button.setEnabled(True)
 
     def show_spectrum(self, mz, intensity, title: str):
@@ -337,6 +363,24 @@ class MaldiViewer(QtWidgets.QMainWindow):
     def show_total_spectrum(self):
         if self.dataset:
             self.show_spectrum(self.dataset.average_mz, self.dataset.average_intensity, "Whole-image mean spectrum — stored SCiLS RMS-normalized values")
+
+    def show_total_ion_image(self):
+        if not self.dataset:
+            return
+        self.display_is_overlay = False
+        self.current_image_mode = "total"
+        self.current_display_image = self.dataset.total_ion_image
+        self.image_view.setImage(self.current_display_image, autoRange=True, autoLevels=True)
+        self.image_view.getView().setTitle(
+            "Total ion image — summed stored SCiLS RMS-normalized intensity"
+        )
+        self.roi.show()
+        self.export_image_button.setEnabled(True)
+        self.add_overlay_button.setEnabled(False)
+        self.status.setText(
+            "Displaying the total ion image: the sum of all stored RMS-normalized "
+            "intensities at each acquired pixel."
+        )
 
     def nearest_local_peak(self, x: float) -> int:
         mz, intensity = self.current_spectrum_mz, self.current_spectrum_intensity
@@ -392,8 +436,8 @@ class MaldiViewer(QtWidgets.QMainWindow):
             left = np.searchsorted(mz, low, side="left")
             right = np.searchsorted(mz, high, side="right")
             value = float(np.sum(intensity[left:right], dtype=np.float64))
-            tic = float(np.sum(intensity, dtype=np.float64))
             row, col = int(coordinate[1]) - dataset.y_min, int(coordinate[0]) - dataset.x_min
+            tic = float(dataset.total_ion_image[row, col])
             raw[row, col] = value
             tic_normalized[row, col] = value / tic if tic > 0 else np.nan
         return raw, tic_normalized
@@ -417,12 +461,16 @@ class MaldiViewer(QtWidgets.QMainWindow):
         if self.current_raw_image is None:
             return
         self.display_is_overlay = False
+        self.current_image_mode = "ion"
         self.current_display_image = self.current_raw_image if self.normalization.currentIndex() == 0 else self.current_tic_image
         self.image_view.setImage(self.current_display_image, autoRange=True, autoLevels=True)
         label = self.normalization.currentText()
         self.image_view.getView().setTitle(f"m/z {self.current_mz:.4f} ± {self.tolerance.value():.4f} Da — {label}")
+        self.add_overlay_button.setEnabled(True)
 
     def on_normalization_changed(self):
+        if self.current_image_mode == "total":
+            return
         if self.display_is_overlay and self._visible_overlay_layers():
             self.build_overlay()
         else:
@@ -452,7 +500,11 @@ class MaldiViewer(QtWidgets.QMainWindow):
                 hover_text = "\n".join(lines)
             else:
                 value = self.current_display_image[row, col]
-                hover_text = f"x={x}, y={y}\nIntensity={value:.6g}"
+                value_label = (
+                    "Total stored intensity" if self.current_image_mode == "total"
+                    else "Intensity"
+                )
+                hover_text = f"x={x}, y={y}\n{value_label}={value:.6g}"
             self.image_hover.setText(hover_text, color="k")
             self.image_hover.setPos(col, row)
             self.image_hover.show()
@@ -648,6 +700,7 @@ class MaldiViewer(QtWidgets.QMainWindow):
             rgb += scaled[..., np.newaxis] * color
         self.current_overlay_rgb = np.clip(rgb, 0.0, 1.0)
         self.display_is_overlay = True
+        self.current_image_mode = "overlay"
         self.image_view.setImage(
             np.round(self.current_overlay_rgb * 255).astype(np.uint8),
             autoRange=True,
@@ -667,7 +720,13 @@ class MaldiViewer(QtWidgets.QMainWindow):
         use_roi = self.export_area.currentText() == "Rectangle ROI"
         area_suffix = "_roi" if use_roi else ""
         is_overlay = self.display_is_overlay and self.current_overlay_rgb is not None
-        base_name = "ion_overlay" if is_overlay else f"ion_mz_{self.current_mz:.4f}"
+        is_total = self.current_image_mode == "total"
+        if is_overlay:
+            base_name = "ion_overlay"
+        elif is_total:
+            base_name = "total_ion_image"
+        else:
+            base_name = f"ion_mz_{self.current_mz:.4f}"
         filename, selected = QtWidgets.QFileDialog.getSaveFileName(
             self, "Export publication ion image", f"{base_name}{area_suffix}.tiff",
             "TIFF (*.tif *.tiff);;PNG (*.png);;PDF (*.pdf);;SVG (*.svg)"
@@ -712,6 +771,10 @@ class MaldiViewer(QtWidgets.QMainWindow):
                 ncol=min(3, len(legend_handles)),
                 frameon=False,
             )
+        elif is_total:
+            ax.set_title("Total ion image — stored SCiLS RMS-normalized values")
+            cbar = fig.colorbar(shown, ax=ax, fraction=0.046, pad=0.04)
+            cbar.set_label("Summed stored intensity (SCiLS RMS-normalized)")
         else:
             ax.set_title(f"m/z {self.current_mz:.4f} ± {self.tolerance.value():.4f} Da")
             cbar = fig.colorbar(shown, ax=ax, fraction=0.046, pad=0.04)
@@ -781,11 +844,14 @@ class MaldiViewer(QtWidgets.QMainWindow):
         self._busy = busy
         self.open_button.setEnabled(not busy)
         self.total_button.setEnabled(not busy and self.dataset is not None)
+        self.total_image_button.setEnabled(not busy and self.dataset is not None)
         self.roi_button.setEnabled(
             not busy and self.dataset is not None and self.current_display_image is not None
         )
         self.add_overlay_button.setEnabled(
-            not busy and self.current_raw_image is not None
+            not busy
+            and self.current_raw_image is not None
+            and self.current_image_mode != "total"
         )
         self.build_overlay_button.setEnabled(
             not busy and bool(self.overlay_layers)
@@ -822,3 +888,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
