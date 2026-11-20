@@ -31,7 +31,10 @@ After installation, start with `run_viewer.bat` if `python` points to this envir
 5. Hover over the ion image for the exact array value at a pixel.
 6. Click an acquired pixel to show its spectrum.
 7. Move/resize the cyan rectangle and click **Average rectangle ROI** for an ROI spectrum.
-8. Click **Whole-image mean** to restore the total mean spectrum.
+8. Click **Whole-image mean spectrum** to restore the spectrum averaged across all acquired pixels.
+9. Click **Total ion image** to display the sum of the complete stored spectrum at each pixel.
+
+The total ion image uses the intensities stored in the imzML. For SCiLS RMS-normalized exports, it is therefore the sum of the stored RMS-normalized spectrum, not original detector-count TIC.
 
 ## Multi-ion overlays
 
@@ -59,15 +62,22 @@ The primary display is labeled **Stored intensity (SCiLS RMS-normalized)** becau
 ## Publication export
 
 - Ion images: TIFF, PNG, PDF, or SVG.
+- Total ion images and multi-ion overlays use the same export formats and controls.
 - Spectra: SVG, PDF, TIFF, or PNG.
 - Default raster resolution: 600 dpi.
+- Export either the full image or the current rectangular ROI.
+- Pixel axes are hidden by default and can be restored with **Show pixel axes**.
+- Choose a white or black scale bar and place it in any corner.
 - Enter the dataset calibration in µm/pixel to add a physical scale bar. Leave it at zero to omit the scale bar.
 
 The export is redrawn with Matplotlib; it is not a screenshot of the interactive window.
 
 ## Performance notes
 
-- The mean spectrum and each new ion image require one pass through the imzML spectra.
+- The mean spectrum and total ion image are calculated together during the initial pass through the imzML spectra.
+- Each new ion image requires one additional pass through the spectra.
+- The cached total ion image is reused as the denominator for optional TIC normalization.
 - Previously calculated `(m/z, tolerance)` images are cached in RAM.
 - Changing between stored RMS intensity and additional TIC normalization is immediate because both images are calculated together.
 - The cache is cleared whenever a new dataset is opened and disappears when the application closes.
+
