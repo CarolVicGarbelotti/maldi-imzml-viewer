@@ -1,0 +1,31 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using the metadata below."
+title: "MALDI imzML Viewer"
+type: software
+version: 0.1.0
+date-released: 2026-11-22
+
+authors:
+  - family-names: "Garbelotti"
+    given-names: "Carolina"
+    orcid: "https://orcid.org/0000-0003-2631-4473"
+    affiliation: "Universidade de São Paulo"
+
+repository-code: "https://github.com/CarolVicGarbelotti/maldi-imzml-viewer"
+url: "https://github.com/CarolVicGarbelotti/maldi-imzml-viewer"
+license: MIT
+
+abstract: >-
+  A Windows-friendly Python desktop application for visualization and
+  exploratory analysis of MALDI mass spectrometry imaging data in imzML
+  format. The software provides whole-image mean and pixel spectra,
+  selected-ion and total-ion images, rectangular region-of-interest analysis,
+  custom multi-ion overlays, optional additional TIC normalization, and
+  publication-quality figure export.
+
+keywords:
+  - MALDI imaging
+  - imzML
+  - mass spectrometry imaging
+  - ion imaging
+  - Python
