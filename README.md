@@ -1,5 +1,6 @@
 # Standalone MALDI imzML Viewer
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24447064.svg)](https://doi.org/10.5281/zenodo.24447064)
 A Windows-friendly desktop viewer for SCiLS-exported, RMS-normalized imzML datasets.
 
 ## Installation
@@ -91,9 +92,9 @@ ORCID: [0000-0003-2631-4473](https://orcid.org/0000-0003-2631-4473)
 
 If you use this software, please cite:
 
-> Garbelotti, C. (2026). *MALDI imzML Viewer* (Version 0.1.0) [Computer software]. GitHub. https://github.com/CarolVicGarbelotti/maldi-imzml-viewer
+> Garbelotti, C. (2026). *MALDI imzML Viewer* (Version 0.1.0) [Computer software]. Zenodo. https://doi.org/10.5281/zenodo.24447064
 
-The repository includes a [CITATION.cff](CITATION.cff) file so GitHub can generate APA and BibTeX citations. A DOI will be added after the software release is archived through Zenodo.
+The repository includes a [CITATION.cff](CITATION.cff) file so GitHub can generate APA and BibTeX citations. The archived version is available through [Zenodo](https://doi.org/10.5281/zenodo.24447064).
 
 ## Scope and limitations
 
