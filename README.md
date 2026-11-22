@@ -81,3 +81,35 @@ The export is redrawn with Matplotlib; it is not a screenshot of the interactive
 - Changing between stored RMS intensity and additional TIC normalization is immediate because both images are calculated together.
 - The cache is cleared whenever a new dataset is opened and disappears when the application closes.
 
+## Author and affiliation
+
+**Carolina Garbelotti**  
+Universidade de São Paulo  
+ORCID: [0000-0003-2631-4473](https://orcid.org/0000-0003-2631-4473)
+
+## Citation
+
+If you use this software, please cite:
+
+> Garbelotti, C. (2026). *MALDI imzML Viewer* (Version 0.1.0) [Computer software]. GitHub. https://github.com/CarolVicGarbelotti/maldi-imzml-viewer
+
+The repository includes a [CITATION.cff](CITATION.cff) file so GitHub can generate APA and BibTeX citations. A DOI will be added after the software release is archived through Zenodo.
+
+## Scope and limitations
+
+- The viewer is intended for exploratory visualization and figure preparation; it does not replace validation in vendor software or a validated quantitative pipeline.
+- Intensities are interpreted exactly as stored in the imzML file. Input exported with RMS or another normalization remains normalized in the viewer.
+- The total-ion image is the per-pixel sum of stored intensities and is not original detector-count TIC when the source data were already normalized.
+- **Additional TIC normalization** is a second normalization applied to the stored data and should be used intentionally.
+- Ion images depend on the selected m/z and tolerance; the viewer does not perform automatic mass recalibration, peak identification or deconvolution.
+- Physical scale bars require the user to provide the correct spatial calibration in µm/pixel.
+- Performance depends on dataset size, storage speed and available system memory.
+- The viewer reads imzML/ibd pairs and does not convert proprietary vendor formats.
+
+## Development transparency
+
+The software was developed through an AI-assisted programming workflow using OpenAI ChatGPT/Codex. Scientific requirements, domain-specific decisions, testing with experimental data and validation of outputs were conducted by the researcher.
+
+## License
+
+This project is distributed under the [MIT License](LICENSE).
