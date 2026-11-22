@@ -4,6 +4,7 @@ title: "MALDI imzML Viewer"
 type: software
 version: 0.1.0
 date-released: 2026-11-22
+doi: "10.5281/zenodo.24447064"
 
 authors:
   - family-names: "Garbelotti"
